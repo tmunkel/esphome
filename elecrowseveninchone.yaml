@@ -244,26 +244,12 @@ time:                                                        # Network time sync
     id: time_comp                                            # Internal ID for time component
 
 sensor:                                                      # Hardware sensor definitions
-  - platform: aht10                                          # AHT10/20 temperature and humidity driver
-    i2c_id: bus_a                                            # Connect to the configured I2C bus_a
-    address: 0x38                                            # Default I2C address for AHT20
-    variant: AHT20                                           # Specify exact sensor model variant
-    temperature: 
-      id: temperature70                                      # Internal ID to read in LVGL UI
-      name: "HMI-70 Temperature"                             # Entity name for temperature reading
-    humidity: 
-      id: humidity70                                         # Internal ID to read in LVGL UI
-      name: "HMI-70 Humidity"                                # Entity name for humidity reading
-    update_interval: 5s                                      # Poll sensor data every 5 seconds
   - platform: homeassistant
     entity_id: sensor.gw1100a_outdoor_temperature
     id: ecowitoutdoortemp
   - platform: homeassistant
     entity_id: sensor.gw1100a_humidity
-    id: ecowitoutdoorhumidity
-
-
-    
+    id: ecowitoutdoorhumidity    
     
 touchscreen:                                                 # Touch digitizer configuration
   platform: gt911                                            # Driver for Goodix GT911 controllers
