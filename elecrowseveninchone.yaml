@@ -86,28 +86,27 @@ light:
     on_state:
       then:
         - lambda: |-
-            const bool target_on = id(led_switch) > 0;
-            const float target_brightness = id(led_switch) / 100.0f;
-            const auto &actual = id(back_light).remote_values;
-  
-            if (actual.is_on() == target_on &&
-                (!target_on ||
-                 fabsf(actual.get_brightness() - target_brightness) < 0.0001f)) {
+            if (id(backlight_internal_update)) {
               return;
             }
-  
-            id(backlight_internal_update) = true;
-  
-            auto call = id(back_light).make_call();
-            call.set_state(target_on);
-            if (target_on) {
-              call.set_brightness(target_brightness);
+
+            id(motion_countdown).stop();
+
+            if (id(motion_sensor).state) {
+              id(led_switch) = 100;
+            } else {
+              if (id(back_light).remote_values.is_on()) {
+                const int level = static_cast<int>(
+                    id(back_light).remote_values.get_brightness() * 100.0f + 0.5f);
+                id(led_switch) = level > 0 ? level : 1;
+              } else {
+                id(led_switch) = 0;
+              }
+
+              if (id(led_switch) > 0) {
+                id(motion_countdown).execute();
+              }
             }
-            call.set_transition_length(0);
-            call.set_save(false);
-            call.perform();
-  
-            id(backlight_internal_update) = false;
 globals:
   - id: led_switch
     type: int
@@ -374,12 +373,22 @@ interval:                                                    # Recurringled_swit
                       src: no_light
                 
       - lambda: |-
+          const bool target_on = id(led_switch) > 0;
+          const float target_brightness = id(led_switch) / 100.0f;
+          const auto &actual = id(back_light).remote_values;
+
+          if (actual.is_on() == target_on &&
+              (!target_on ||
+               fabsf(actual.get_brightness() - target_brightness) < 0.0001f)) {
+            return;
+          }
+
           id(backlight_internal_update) = true;
 
           auto call = id(back_light).make_call();
-          call.set_state(id(led_switch) > 0);
-          if (id(led_switch) > 0) {
-            call.set_brightness(id(led_switch) / 100.0f);
+          call.set_state(target_on);
+          if (target_on) {
+            call.set_brightness(target_brightness);
           }
           call.set_transition_length(0);
           call.set_save(false);
