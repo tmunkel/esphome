@@ -75,18 +75,96 @@ output:                                                      # Hardware output d
     frequency: 1220                                          # 1220 Hz PWM frequency prevents flickering
     id: gpio_backlight_pwm                                   # Internal ID to link with light component
 
-light:                                                       # Light entities exposed to Home Assistant
-  - platform: monochromatic                                  # Single-color brightness-controlled light
-    output: gpio_backlight_pwm                               # Link to the PWM output defined above
-    name: Display Backlight                                  # Entity name shown in Home Assistant
-    id: back_light                                           # Internal ID for automation reference
-    restore_mode: ALWAYS_ON                                  # Ensure screen turns on after power loss
+light:
+  - platform: monochromatic
+    output: gpio_backlight_pwm
+    name: Display Backlight
+    id: back_light
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 0s
 
-switch:                                                      # Switch entities exposed to Home Assistant
-  - platform: gpio                                           # Basic GPIO toggle switch
-    pin: 38                                                  # Connected to physical GPIO 38
-    name: "LED Control"                                      # Entity name shown in Home Assistant
-    id: led_switch                                           # Internal ID for UI interaction
+    on_state:
+      then:
+        - lambda: |-
+            // Automatic brightness updates must not restart the timer.
+            if (id(backlight_internal_update)) {
+              return;
+            }
+
+            id(motion_countdown).stop();
+
+            if (id(motion_sensor).state) {
+              id(led_switch) = 100;
+            } else {
+              if (id(back_light).remote_values.is_on()) {
+                const int level = static_cast<int>(
+                    id(back_light).remote_values.get_brightness() * 100.0f + 0.5f);
+                id(led_switch) = level > 0 ? level : 1;
+              } else {
+                id(led_switch) = 0;
+              }
+
+              if (id(led_switch) > 0) {
+                id(motion_countdown).execute();
+              }
+            }
+
+globals:
+  - id: led_switch
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: backlight_internal_update
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: countdown_start_level
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO38
+      mode: INPUT
+    name: "Motion Sensor"
+    id: motion_sensor
+    device_class: motion
+    trigger_on_initial_state: true
+
+    on_press:
+      then:
+        - script.stop: motion_countdown
+        - globals.set:
+            id: led_switch
+            value: '100'
+
+    on_release:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(led_switch) > 0;'
+            then:
+              - script.execute: motion_countdown
+
+script:
+  - id: motion_countdown
+    mode: restart
+    then:
+      - lambda: |-
+          id(countdown_start_level) = id(led_switch);
+      - delay: 60s
+      - repeat:
+          count: 100
+          then:
+            - delay: 600ms
+            - lambda: |-
+                // Round upward so zero occurs only at the final step.
+                id(led_switch) =
+                    (id(countdown_start_level) * (99 - iteration) + 99) / 100;
 
 image:
   - platform: file
@@ -198,17 +276,17 @@ touchscreen:                                                 # Touch digitizer c
     mirror_y: false                                          # Do not invert Y-axis coordinates
     swap_xy: false                                           # Do not swap X and Y axes
 
-binary_sensor:                                               # Virtual sensors based on touch events
-  - platform: touchscreen                                    # Define a specific touch zone as a button
-    name: "Light Touch Button"                               # Entity name for the virtual button
-    touchscreen_id: my_touchscreen                           # Link to the GT911 touchscreen
-    x_min: 150                                               # Left boundary of the touch zone (px)
-    x_max: 202                                               # Right boundary of the touch zone (px)
-    y_min: 300                                               # Top boundary of the touch zone (px)
-    y_max: 352                                               # Bottom boundary of the touch zone (px)
-    on_press:                                                # Action triggered when touched
-      then: 
-        - switch.toggle: led_switch                          # Toggle the GPIO38 LED switch
+#binary_sensor:                                               # Virtual sensors based on touch events
+#  - platform: touchscreen                                    # Define a specific touch zone as a button
+#    name: "Light Touch Button"                               # Entity name for the virtual button
+#    touchscreen_id: my_touchscreen                           # Link to the GT911 touchscreen
+#    x_min: 150                                               # Left boundary of the touch zone (px)
+#    x_max: 202                                               # Right boundary of the touch zone (px)
+#    y_min: 300                                               # Top boundary of the touch zone (px)
+#    y_max: 352                                               # Bottom boundary of the touch zone (px)
+#    on_press:                                                # Action triggered when touched
+#      then: 
+#        - switch.toggle: led_switch                          # Toggle the GPIO38 LED switch
 
 lvgl:                                                        # LVGL (Graphics Library) UI layout
   displays: 
@@ -266,7 +344,7 @@ lvgl:                                                        # LVGL (Graphics Li
         y: 400                                               # Y-axis position below humidity icon
 
     
-interval:                                                    # Recurring background tasks
+interval:                                                    # Recurringled_switch background tasks
   - interval: 1s                                             # Run the following actions every 1 second
     then: 
       - lvgl.label.update:                                   # Action: Update LVGL widget text
@@ -279,23 +357,34 @@ interval:                                                    # Recurring backgro
           text: 
             format: "%.1f"                                   # Format float to 1 decimal place
             args: ['id(ecowitoutdoortemp).state']                # Retrieve current temperature value
+      - lvgl.label.update:
+          id: led_status
+          text:
+            format: "%d"
+            args: ['id(led_switch)']
+
       - if:
           condition:
-            switch.is_on: led_switch
+            lambda: 'return id(led_switch) > 0;'
           then:
             - lvgl.image.update:
                 id: lvgl_light
                 src: on_light
-
-            - lvgl.label.update:
-                id: led_status
-                text: "ON"
-
           else:
             - lvgl.image.update:
                 id: lvgl_light
                 src: no_light
+                
+      - lambda: |-
+          id(backlight_internal_update) = true;
 
-            - lvgl.label.update:
-                id: led_status
-                text: "OFF"
+          auto call = id(back_light).make_call();
+          call.set_state(id(led_switch) > 0);
+          if (id(led_switch) > 0) {
+            call.set_brightness(id(led_switch) / 100.0f);
+          }
+          call.set_transition_length(0);
+          call.set_save(false);
+          call.perform();
+
+          id(backlight_internal_update) = false;
