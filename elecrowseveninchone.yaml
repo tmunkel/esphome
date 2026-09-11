@@ -86,29 +86,28 @@ light:
     on_state:
       then:
         - lambda: |-
-            // Automatic brightness updates must not restart the timer.
-            if (id(backlight_internal_update)) {
+            const bool target_on = id(led_switch) > 0;
+            const float target_brightness = id(led_switch) / 100.0f;
+            const auto &actual = id(back_light).remote_values;
+  
+            if (actual.is_on() == target_on &&
+                (!target_on ||
+                 fabsf(actual.get_brightness() - target_brightness) < 0.0001f)) {
               return;
             }
-
-            id(motion_countdown).stop();
-
-            if (id(motion_sensor).state) {
-              id(led_switch) = 100;
-            } else {
-              if (id(back_light).remote_values.is_on()) {
-                const int level = static_cast<int>(
-                    id(back_light).remote_values.get_brightness() * 100.0f + 0.5f);
-                id(led_switch) = level > 0 ? level : 1;
-              } else {
-                id(led_switch) = 0;
-              }
-
-              if (id(led_switch) > 0) {
-                id(motion_countdown).execute();
-              }
+  
+            id(backlight_internal_update) = true;
+  
+            auto call = id(back_light).make_call();
+            call.set_state(target_on);
+            if (target_on) {
+              call.set_brightness(target_brightness);
             }
-
+            call.set_transition_length(0);
+            call.set_save(false);
+            call.perform();
+  
+            id(backlight_internal_update) = false;
 globals:
   - id: led_switch
     type: int
@@ -124,6 +123,11 @@ globals:
     type: int
     restore_value: no
     initial_value: '0'
+    
+  - id: light_icon_on
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 binary_sensor:
   - platform: gpio
@@ -351,15 +355,23 @@ interval:                                                    # Recurringled_swit
 
       - if:
           condition:
-            lambda: 'return id(led_switch) > 0;'
+            lambda: |-
+              return (id(led_switch) > 0) != id(light_icon_on);
           then:
-            - lvgl.image.update:
-                id: lvgl_light
-                src: on_light
-          else:
-            - lvgl.image.update:
-                id: lvgl_light
-                src: no_light
+            - lambda: |-
+                id(light_icon_on) = id(led_switch) > 0;
+
+            - if:
+                condition:
+                  lambda: 'return id(light_icon_on);'
+                then:
+                  - lvgl.image.update:
+                      id: lvgl_light
+                      src: on_light
+                else:
+                  - lvgl.image.update:
+                      id: lvgl_light
+                      src: no_light
                 
       - lambda: |-
           id(backlight_internal_update) = true;
